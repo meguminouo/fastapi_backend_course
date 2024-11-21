@@ -1,22 +1,95 @@
-from fastapi import FastAPI
+from fastapi import FastAPI ,Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import creat_egine ,Column ,Integer ,String ,Boolean
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker ,Session
 
 app = FastAPI()
 
-class Item(BaseModel):
-    name: str # 必填
-    price: float
-    description: str =None # 非必填
+'''
+DATABASE
+'''
 
-@app.get("/") # 路徑名稱
-def read_root(): # 呼叫此function
-    return {"Hello": "World"} # 執行function程式
+DATABASE_URL = "sqlite:///./todos.db"
+Base = declarative_base()
+engine = creat_egine(DATABASE_URL, connect_args={"check_same_thread":False})
+SessionLocal = sessionmaker(sutocommit=False, autoflush=False, bind=engine)
 
-@app.get("/happy") # 路徑名稱
-def read_happy(): # 呼叫此function
-    return "I am so happy." # 執行function程式
+# DEfine Model
+class Todo(Base):
+    __tablename__="todos"
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String, nullable=False)
+    descrption = Column(String, nullable=True)
+    completed = Column(Boolean, default=False)
 
-@app.get("/items/") # 路徑名稱
-def creat_item(item: Item): # 呼叫此function
-    print(f"Recive item: {item}")
-    return {"message": "Item recived" ,"item": item} # 執行function程式
+# Initialize Database's Table
+Base.metadata.create_all(bind=engine) 
+'''
+VALIDATION
+'''
+# Pydantic
+class TodoBase(BaseModel):
+    title: str
+    description: str | None = None
+    completed: bool = False
+
+class TodoCreate(TodoBase):
+    pass
+
+class TodoResponse(TodoBase):
+    id: int
+
+    class Config:
+        orm_mode = True
+
+# Batabase  Injection
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+'''
+ROUTING
+'''
+
+@app.post("/todos", response_model=TodoResponse)
+def create_todo(todo: TodoCreate, db:Session = Depends(get_db())):
+    db_todo = Todo(**todo.model_dump())
+    db.add(db_todo)
+    db.commit()
+    db.refresh(db_todo)
+    return db_todo
+
+@app.get("/todos", response_model=list[TodoResponse])
+def read_todos(db: Session = Depends(get_db())):
+    return db.query(Todo).all()
+
+@app.get("/todo//{todo_id}", response_model=TodoResponse)
+def read_todo(todo_id: int, db:Session = Depends(get_db())):
+    db_todo = db.query(Todo).filter(Todo.id == todo_id).first()
+    if not db_todo:
+        raise HTTPException(status_code=404, details="Todo not found")
+    return db_todo
+
+@app.put("/todo//{todo_id}", response_model=TodoResponse)
+def update_tod(todo_id: int, todo:TodoCreate, db:Session = Depends(get_db())):
+    db_todo = db.query(Todo).filter(Todo.id == todo_id).first()
+    if not db_todo:
+        raise HTTPException(status_code=404, details="Todo not found")
+    for key, value, in todo.model_dump.items():
+        setattr(db_todo, key, value)
+    db.commit()
+    db.refresh(db_todo)
+    return db_todo 
+
+@app.delete("/todo/{todo_id}")
+def delete_todo(todo_id: int, db:Session = Depends(get_db())):
+    db_todo = db.query(Todo).filter(Todo.id == todo_id).first()
+    if not db_todo:
+        raise HTTPException(status_code=404, details="Todo not found")
+    db.delete(db_todo)
+    db.commit()
+    return {"detail":"Todo deleted successfully"}
